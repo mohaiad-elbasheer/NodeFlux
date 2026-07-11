@@ -9,6 +9,16 @@ const check = (name, ok, extra = "") => {
   if (!ok) process.exitCode = 1;
 };
 
+// Seed the sample dataset so this script is self-sufficient.
+{
+  const { readFile } = await import("fs/promises");
+  const csv = await readFile("public/sample-suppliers.csv");
+  const form = new FormData();
+  form.append("file", new File([csv], "sample-suppliers.csv", { type: "text/csv" }));
+  const res = await fetch("http://localhost:3100/api/ingest", { method: "POST", body: form });
+  if (!res.ok) throw new Error(`sample ingest failed: ${res.status}`);
+}
+
 const browser = await chromium.launch({
   executablePath: "/opt/pw-browsers/chromium",
   args: ["--no-sandbox"],

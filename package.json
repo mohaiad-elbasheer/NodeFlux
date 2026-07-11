@@ -6,7 +6,9 @@
     "dev": "next dev --turbopack",
     "build": "next build --turbopack",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test:engine": "tsx scripts/test-engine.ts",
+    "verify:ui": "node scripts/verify-ui.mjs && node scripts/verify-simulation.mjs && node scripts/verify-e2e.mjs"
   },
   "dependencies": {
     "@xyflow/react": "^12.11.2",

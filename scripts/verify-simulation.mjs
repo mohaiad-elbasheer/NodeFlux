@@ -1,7 +1,8 @@
 // Phase 3 verification: dragging the bottleneck severity slider recolors
 // graph edges instantly and forces an automated pathway rerouting in the
-// Top-3 report. Assumes the dev/prod server on :3100 with sample data loaded.
+// Top-3 report. Assumes the dev/prod server on :3100; seeds sample data itself.
 import { chromium } from "playwright-core";
+import { readFile } from "fs/promises";
 
 const SCRATCH =
   "/tmp/claude-0/-home-user-NodeFlux/d26881af-69d1-5c36-857f-d04f683c2211/scratchpad";
@@ -10,6 +11,15 @@ const check = (name, ok, extra = "") => {
   results.push(`${ok ? "PASS" : "FAIL"} ${name}${extra ? " — " + extra : ""}`);
   if (!ok) process.exitCode = 1;
 };
+
+// Seed the sample dataset so this script is self-sufficient.
+{
+  const csv = await readFile("public/sample-suppliers.csv");
+  const form = new FormData();
+  form.append("file", new File([csv], "sample-suppliers.csv", { type: "text/csv" }));
+  const res = await fetch("http://localhost:3100/api/ingest", { method: "POST", body: form });
+  if (!res.ok) throw new Error(`sample ingest failed: ${res.status}`);
+}
 
 const browser = await chromium.launch({
   executablePath: "/opt/pw-browsers/chromium",
