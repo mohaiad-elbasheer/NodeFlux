@@ -1,14 +1,20 @@
 "use client";
 
 // Analyst report: Top-3 recommended inbound pathways for the supplier in
-// focus (selected, or the one hit hardest by the active simulation), with
-// comparative lead-time deltas and regional vulnerability scoring.
+// focus. Deterministic mode shows weight/lead-time deltas; stochastic mode
+// shows distributional stats — histogram, P50/P95, CVaR, on-time gauge, and
+// mean deltas with a CI half-width (conservative: ignores CRN covariance).
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { ArrowRight, Route, TrendingDown, TrendingUp } from "lucide-react";
 import { useAppStore } from "@/lib/store";
 import { fmtDelta, riskBadgeClasses } from "@/lib/utils";
 import type { PathResult, SupplierRouting } from "@/lib/types";
+import type {
+  StochasticPathResult,
+  StochasticRouting,
+} from "@/lib/graph/stochastic-routing";
+import type { PathStats } from "@/lib/stochastic/model";
 
 const MODE_HINTS: Record<string, string> = {
   "rail-eurasia": "Rail Corridor",
@@ -18,7 +24,311 @@ const MODE_HINTS: Record<string, string> = {
   "route-malacca": "Malacca",
 };
 
-export default function AltPathsReport() {
+function useRouteSummary() {
+  const nodesById = useAppStore((s) => s.nodesById);
+  return (p: PathResult) =>
+    p.nodeIds
+      .map((id) => {
+        const n = nodesById.get(id);
+        if (!n) return null;
+        if (n.kind === "port") return MODE_HINTS[id] ?? n.label.replace(/^Port of /, "");
+        if (n.kind === "raw-origin") return n.label.split("—")[0].trim();
+        return n.label;
+      })
+      .filter((s): s is string => !!s);
+}
+
+function RouteBreadcrumb({ segments }: { segments: string[] }) {
+  return (
+    <p className="mt-1.5 flex flex-wrap items-center gap-x-1 gap-y-0.5 text-[10px] text-slate-400">
+      {segments.map((seg, j) => (
+        <span key={j} className="inline-flex items-center gap-1">
+          {seg}
+          {j < segments.length - 1 && <ArrowRight className="h-2.5 w-2.5 text-slate-600" />}
+        </span>
+      ))}
+    </p>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Stochastic widgets
+// ---------------------------------------------------------------------------
+
+function HistogramStrip({ stats }: { stats: PathStats }) {
+  const { bins, lo, hi } = stats.histogram;
+  const max = Math.max(1, ...bins);
+  const span = Math.max(1e-9, hi - lo);
+  const p95X = ((stats.p95 - lo) / span) * 100;
+  return (
+    <div className="relative mt-2 flex h-7 items-end gap-px" data-testid="path-histogram">
+      {bins.map((b, i) => {
+        const binStart = lo + (i / bins.length) * span;
+        return (
+          <div
+            key={i}
+            className={`flex-1 rounded-t-[1px] ${binStart >= stats.p95 ? "bg-rose-500/70" : "bg-sky-500/50"}`}
+            style={{ height: `${Math.max(4, (b / max) * 100)}%` }}
+          />
+        );
+      })}
+      <div
+        className="absolute bottom-0 top-0 w-px bg-rose-400/80"
+        style={{ left: `${Math.min(99, Math.max(1, p95X))}%` }}
+        title={`P95 = ${stats.p95}d`}
+      />
+    </div>
+  );
+}
+
+function OnTimeGauge({ prob, sla }: { prob: number; sla: number }) {
+  const pct = Math.round(prob * 100);
+  const color = prob >= 0.9 ? "bg-emerald-500" : prob >= 0.6 ? "bg-orange-500" : "bg-rose-500";
+  return (
+    <div className="mt-1.5">
+      <div className="flex items-baseline justify-between text-[10px] text-slate-500">
+        <span>
+          On-time · P(≤ {sla}d)
+        </span>
+        <span className="font-semibold tabular-nums text-slate-300">{pct}%</span>
+      </div>
+      <div className="mt-0.5 h-1.5 overflow-hidden rounded-full bg-slate-800">
+        <div className={`h-full rounded-full ${color}`} style={{ width: `${pct}%` }} />
+      </div>
+    </div>
+  );
+}
+
+function StochasticReport() {
+  const dataset = useAppStore((s) => s.dataset);
+  const nodesById = useAppStore((s) => s.nodesById);
+  const stochastic = useAppStore((s) => s.stochastic);
+  const baseline = useAppStore((s) => s.stochasticBaseline);
+  const selectedNodeId = useAppStore((s) => s.selectedNodeId);
+  const sla = useAppStore((s) => s.sla);
+  const highlightPath = useAppStore((s) => s.highlightPath);
+  const highlightedPath = useAppStore((s) => s.highlightedPath);
+  const routeSummary = useRouteSummary();
+  const [originChoice, setOriginChoice] = useState<Record<string, string>>({});
+
+  const bySupplier = useMemo(() => {
+    const m = new Map<string, StochasticRouting[]>();
+    for (const r of stochastic?.routings ?? []) {
+      if (!m.has(r.supplierId)) m.set(r.supplierId, []);
+      m.get(r.supplierId)!.push(r);
+    }
+    for (const list of m.values()) list.sort((a, b) => b.sharePct - a.sharePct);
+    return m;
+  }, [stochastic]);
+
+  const baselineFor = (supplierId: string, originNodeId: string) =>
+    baseline?.routings.find(
+      (r) => r.supplierId === supplierId && r.originNodeId === originNodeId,
+    )?.paths[0];
+
+  // Focus: selected supplier, else the supplier whose recommended path's P95
+  // degraded most vs the zero-severity baseline.
+  const focusSupplierId = useMemo(() => {
+    if (selectedNodeId && bySupplier.has(selectedNodeId)) return selectedNodeId;
+    let worst: string | undefined;
+    let worstDelta = -Infinity;
+    for (const [sid, list] of bySupplier) {
+      const cur = list[0]?.paths[0];
+      const base = list[0] ? baselineFor(sid, list[0].originNodeId) : undefined;
+      if (!cur || !base) continue;
+      const d = cur.stats.p95 - base.stats.p95;
+      if (d > worstDelta) {
+        worstDelta = d;
+        worst = sid;
+      }
+    }
+    return worst ?? bySupplier.keys().next().value;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bySupplier, selectedNodeId, baseline]);
+
+  if (!dataset || !stochastic || !focusSupplierId) {
+    return (
+      <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-4 text-xs text-slate-500">
+        Sampling scenarios…
+      </div>
+    );
+  }
+
+  const supplier = dataset.suppliers.find((s) => s.id === focusSupplierId);
+  const origins = bySupplier.get(focusSupplierId) ?? [];
+  const chosenOrigin = originChoice[focusSupplierId];
+  const routing = origins.find((o) => o.originNodeId === chosenOrigin) ?? origins[0];
+  if (!routing) return null;
+  const baseBest = baselineFor(focusSupplierId, routing.originNodeId);
+
+  return (
+    <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-4" data-testid="stochastic-report">
+      <h3 className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-slate-400">
+        <Route className="h-3.5 w-3.5 text-violet-400" />
+        Top {Math.min(3, routing.paths.length)} Pathways · {policyLabel(stochastic.policy)}
+      </h3>
+      <p className="mt-1 text-[11px] text-slate-500">
+        {supplier?.supplierName ?? focusSupplierId}
+        {!selectedNodeId && <span className="ml-1 text-orange-400/80">(highest tail-risk shift)</span>}
+      </p>
+
+      {origins.length > 1 && (
+        <div className="mt-2 flex flex-wrap gap-1">
+          {origins.map((o) => {
+            const label =
+              nodesById.get(o.originNodeId)?.label.split("—")[0].trim() ?? o.originNodeId;
+            const active = o.originNodeId === routing.originNodeId;
+            return (
+              <button
+                key={o.originNodeId}
+                onClick={() =>
+                  setOriginChoice((c) => ({ ...c, [focusSupplierId]: o.originNodeId }))
+                }
+                className={`rounded-full border px-2 py-0.5 text-[10px] transition-colors ${
+                  active
+                    ? "border-violet-500/60 bg-violet-500/15 text-violet-300"
+                    : "border-slate-700 text-slate-400 hover:border-slate-500"
+                }`}
+              >
+                {label} · {o.sharePct}%
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      <ol className="mt-3 space-y-2">
+        {routing.paths.map((p, i) => (
+          <StochasticPathCard
+            key={p.edgeIds.join()}
+            path={p}
+            rank={i}
+            sla={sla}
+            n={stochastic.n}
+            baseline={baseBest}
+            segments={routeSummary(p)}
+            highlighted={highlightedPath?.edgeIds.join() === p.edgeIds.join()}
+            onToggle={(on) =>
+              highlightPath(on ? { nodeIds: p.nodeIds, edgeIds: p.edgeIds } : null)
+            }
+          />
+        ))}
+      </ol>
+    </div>
+  );
+}
+
+function policyLabel(policy: string): string {
+  return { expected: "Expected", p95: "P95", cvar95: "CVaR₉₅", onTime: "On-time" }[policy] ?? policy;
+}
+
+function StochasticPathCard({
+  path,
+  rank,
+  sla,
+  n,
+  baseline,
+  segments,
+  highlighted,
+  onToggle,
+}: {
+  path: StochasticPathResult;
+  rank: number;
+  sla: number;
+  n: number;
+  baseline?: StochasticPathResult;
+  segments: string[];
+  highlighted: boolean;
+  onToggle: (on: boolean) => void;
+}) {
+  const s = path.stats;
+  // Conservative CI half-width for the mean delta (ignores CRN covariance,
+  // so the true interval is tighter).
+  const deltaMean = baseline ? s.mean - baseline.stats.mean : 0;
+  const ciHalf = baseline
+    ? Math.round(
+        ((1.645 * Math.sqrt(s.stdev ** 2 + baseline.stats.stdev ** 2)) / Math.sqrt(n)) * 10,
+      ) / 10
+    : 0;
+
+  return (
+    <li>
+      <button
+        onClick={() => onToggle(!highlighted)}
+        className={`w-full rounded-lg border p-2.5 text-left transition-colors ${
+          highlighted
+            ? "border-violet-500/60 bg-violet-500/10"
+            : "border-slate-800 bg-slate-950/50 hover:border-slate-600"
+        }`}
+      >
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-[11px] font-bold text-slate-200">
+            Path {rank + 1}
+            {rank === 0 && (
+              <span className="ml-1.5 rounded bg-emerald-500/15 px-1.5 py-0.5 text-[9px] font-semibold text-emerald-400">
+                RECOMMENDED
+              </span>
+            )}
+          </span>
+          <span
+            className={`rounded-full border px-1.5 py-0.5 text-[9px] font-semibold ${riskBadgeClasses(
+              Math.min(1, Math.max(0, (s.p95 / Math.max(1e-9, s.p50) - 1) / 2)),
+            )}`}
+          >
+            CVaR₉₅ {s.cvar95.toFixed(1)}d
+          </span>
+        </div>
+
+        <RouteBreadcrumb segments={segments} />
+        <HistogramStrip stats={s} />
+
+        <div className="mt-1.5 grid grid-cols-4 gap-1 text-center text-[10px] tabular-nums">
+          {(
+            [
+              ["mean", s.mean],
+              ["P50", s.p50],
+              ["P90", s.p90],
+              ["P95", s.p95],
+            ] as const
+          ).map(([label, v]) => (
+            <div key={label} className="rounded bg-slate-900/80 px-1 py-0.5">
+              <div className="text-slate-500">{label}</div>
+              <div className="font-semibold text-slate-200">{v.toFixed(1)}d</div>
+            </div>
+          ))}
+        </div>
+
+        <OnTimeGauge prob={s.onTimeProb} sla={sla} />
+
+        <div className="mt-1.5 flex items-center gap-3 border-t border-slate-800/80 pt-1.5 text-[10px] tabular-nums text-slate-400">
+          {baseline && Math.abs(deltaMean) > 0.05 ? (
+            <span
+              className={`inline-flex items-center gap-0.5 ${
+                deltaMean > 0 ? "text-orange-400" : "text-emerald-400"
+              }`}
+            >
+              {deltaMean > 0 ? (
+                <TrendingUp className="h-3 w-3" />
+              ) : (
+                <TrendingDown className="h-3 w-3" />
+              )}
+              {fmtDelta(deltaMean)} ± {ciHalf}d vs pre-disruption
+            </span>
+          ) : (
+            <span className="text-slate-500">at pre-disruption baseline</span>
+          )}
+          <span className="ml-auto text-slate-500">freight {path.totalFreightCost.toFixed(0)}u</span>
+        </div>
+      </button>
+    </li>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Deterministic report (unchanged behavior)
+// ---------------------------------------------------------------------------
+
+function DeterministicReport() {
   const dataset = useAppStore((s) => s.dataset);
   const nodesById = useAppStore((s) => s.nodesById);
   const routings = useAppStore((s) => s.routings);
@@ -27,14 +337,13 @@ export default function AltPathsReport() {
   const severity = useAppStore((s) => s.regionSeverity);
   const highlightPath = useAppStore((s) => s.highlightPath);
   const highlightedPath = useAppStore((s) => s.highlightedPath);
+  const routeSummary = useRouteSummary();
 
   const baselineBySupplier = useMemo(
     () => new Map(baselineRoutings.map((r) => [r.supplierId, r])),
     [baselineRoutings],
   );
 
-  // Supplier in focus: explicit selection wins; otherwise the supplier whose
-  // best path degraded the most under the current simulation.
   const focus: SupplierRouting | undefined = useMemo(() => {
     const selected = selectedNodeId
       ? routings.find((r) => r.supplierId === selectedNodeId)
@@ -64,17 +373,6 @@ export default function AltPathsReport() {
       .filter(([, v]) => v >= 0.3)
       .map(([r]) => r),
   );
-
-  const routeSummary = (p: PathResult) =>
-    p.nodeIds
-      .map((id) => {
-        const n = nodesById.get(id);
-        if (!n) return null;
-        if (n.kind === "port") return MODE_HINTS[id] ?? n.label.replace(/^Port of /, "");
-        if (n.kind === "raw-origin") return n.label.split("—")[0].trim();
-        return n.label;
-      })
-      .filter(Boolean);
 
   const narrative = (p: PathResult, i: number) => {
     if (!baselineBest) return null;
@@ -112,8 +410,7 @@ export default function AltPathsReport() {
 
       <ol className="mt-3 space-y-2">
         {focus.paths.slice(0, 3).map((p, i) => {
-          const isHighlighted =
-            highlightedPath?.edgeIds.join() === p.edgeIds.join();
+          const isHighlighted = highlightedPath?.edgeIds.join() === p.edgeIds.join();
           const deltaVsBest = baselineBest
             ? p.totalLeadTimeDays - baselineBest.totalLeadTimeDays
             : 0;
@@ -147,16 +444,7 @@ export default function AltPathsReport() {
                   </span>
                 </div>
 
-                <p className="mt-1.5 flex flex-wrap items-center gap-x-1 gap-y-0.5 text-[10px] text-slate-400">
-                  {routeSummary(p).map((seg, j, arr) => (
-                    <span key={j} className="inline-flex items-center gap-1">
-                      {seg}
-                      {j < arr.length - 1 && (
-                        <ArrowRight className="h-2.5 w-2.5 text-slate-600" />
-                      )}
-                    </span>
-                  ))}
-                </p>
+                <RouteBreadcrumb segments={routeSummary(p)} />
 
                 <div className="mt-1.5 flex items-center gap-3 text-[10px] tabular-nums text-slate-400">
                   <span className="font-semibold text-slate-200">
@@ -191,4 +479,9 @@ export default function AltPathsReport() {
       </ol>
     </div>
   );
+}
+
+export default function AltPathsReport() {
+  const engineMode = useAppStore((s) => s.engineMode);
+  return engineMode === "stochastic" ? <StochasticReport /> : <DeterministicReport />;
 }

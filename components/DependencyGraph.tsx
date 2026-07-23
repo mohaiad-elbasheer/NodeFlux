@@ -105,6 +105,8 @@ export default function DependencyGraph() {
   const select = useAppStore((s) => s.select);
   const severity = useAppStore((s) => s.regionSeverity);
   const highlightedPath = useAppStore((s) => s.highlightedPath);
+  const engineMode = useAppStore((s) => s.engineMode);
+  const edgeP95Ratio = useAppStore((s) => s.stochastic?.edgeP95Ratio);
 
   const positions = useMemo(
     () => (dataset ? layeredLayout(dataset.graph) : {}),
@@ -133,8 +135,12 @@ export default function DependencyGraph() {
     if (!dataset) return [];
     const onPath = new Set(highlightedPath?.edgeIds ?? []);
     return dataset.graph.edges.map((e) => {
-      const risk = effectiveEdgeRisk(e, nodesById, severity);
-      const w = edgeWeight(e, risk);
+      const detRisk = effectiveEdgeRisk(e, nodesById, severity);
+      // Stochastic mode colors by tail risk: the edge's P95/modal lead-time
+      // ratio from the Monte Carlo pass, mapped onto the same thresholds.
+      const tailRatio = engineMode === "stochastic" ? edgeP95Ratio?.[e.id] : undefined;
+      const risk = tailRatio !== undefined ? Math.max(0, (tailRatio - 1) / 2) : detRisk;
+      const w = edgeWeight(e, detRisk);
       const highlighted = onPath.has(e.id);
       return {
         id: e.id,
@@ -148,7 +154,7 @@ export default function DependencyGraph() {
         },
       };
     });
-  }, [dataset, nodesById, severity, highlightedPath]);
+  }, [dataset, nodesById, severity, highlightedPath, engineMode, edgeP95Ratio]);
 
   return (
     <ReactFlow
