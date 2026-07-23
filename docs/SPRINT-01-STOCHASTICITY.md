@@ -1,8 +1,38 @@
 # Sprint 01 — From Deterministic Beta to a Realistic Stochastic Engine
 
-**Status: DRAFT — awaiting product-owner approval/corrections.**
+**Status: DELIVERED** (approved as-is with proposed defaults: SLA 30d, P95
+default policy, deterministic default on load, legacy `.xls` dropped).
 Sprint length: 10 working days. Numbering is stable so items can be approved,
-amended, or struck individually (e.g. "drop S-4.3, change QC-2 to exceljs").
+amended, or struck individually.
+
+## Delivery summary
+
+All six workstreams landed. Full detail in `docs/MODEL.md`.
+
+| Item | Status | Where |
+| --- | --- | --- |
+| QC-1 stochasticity | ✅ | `lib/stochastic/*`, `lib/graph/stochastic-routing.ts` |
+| QC-2 xlsx advisories | ✅ exceljs; next→15.5.21 | `app/api/ingest/route.ts` |
+| QC-3 locale numbers | ✅ `parseLocaleNumber` | `lib/csv.ts`, `scripts/test-csv.ts` |
+| QC-4 order-dependent edges | ✅ canonical legs | `data/comtrade-seed.ts`, `lib/graph/build.ts` |
+| QC-5 endpoint-max risk | ✅ `edge.regions[]` additive | `lib/graph/engine.ts` |
+| QC-6 vuln metric | ✅ superseded by P95/CVaR | `lib/stochastic/model.ts` |
+| QC-7 single-origin routing | ✅ all Tier-2 origins routed | `lib/graph/stochastic-routing.ts` |
+| QC-8 antimeridian arcs | ✅ great-circle split | `components/GeoMap.tsx` |
+| QC-9 no CI | ✅ GitHub Actions | `.github/workflows/ci.yml` |
+| S-1 MC core | ✅ 15 statistical assertions | `scripts/test-stochastic.ts` |
+| S-2 policy routing | ✅ 4 policies | `lib/stochastic/model.ts` |
+| S-3 Web Worker | ✅ progressive 200/2000 | `lib/workers/mc.worker.ts` |
+| S-4 uncertainty UI | ✅ histograms/gauges/toggle | `components/*` |
+| S-5 verify/docs | ✅ 4 browser suites + MODEL.md | `scripts/`, `docs/MODEL.md` |
+
+Remaining audit finding: one moderate build-time-only `postcss` transitive
+advisory via Next; no runtime exposure, awaiting upstream. QC-10 (multi-dataset,
+DC config) and recourse routing remain on the backlog by design.
+
+---
+
+*(Original plan preserved below for reference.)*
 
 ---
 
