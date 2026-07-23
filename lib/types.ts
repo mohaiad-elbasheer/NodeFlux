@@ -56,6 +56,11 @@ export interface GraphEdge {
   baselineRisk: number;
   /** Transport mode, for the analyst report ("sea" | "air" | "rail" | "road"). */
   mode: TransportMode;
+  /**
+   * Bottleneck regions this leg is exposed to (endpoint regions united).
+   * Slider severities for ALL listed regions add up on this edge.
+   */
+  regions: string[];
 }
 
 export type TransportMode = "sea" | "air" | "rail" | "road";
@@ -80,6 +85,8 @@ export interface RiskZone {
 
 /** The full dataset held by the server datastore and hydrated into the client. */
 export interface Dataset {
+  /** Bumped when the graph schema changes; stale snapshots are discarded. */
+  schemaVersion: number;
   uploadedAt: string;
   sourceFileName: string;
   suppliers: SupplierRow[];

@@ -94,7 +94,7 @@ export default function Home() {
                 Re-upload
                 <input
                   type="file"
-                  accept=".csv,.xlsx,.xls,text/csv"
+                  accept=".csv,.xlsx,text/csv"
                   className="hidden"
                   onChange={(e) => {
                     const f = e.target.files?.[0];

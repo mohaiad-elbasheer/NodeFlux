@@ -126,6 +126,38 @@ const adj = buildAdjacency(graph);
   );
 }
 
+// 4b. Order independence (QC-4): the graph must be identical however the
+//     CSV rows are ordered.
+{
+  const canon = (g: ReturnType<typeof buildGraph>) =>
+    JSON.stringify(
+      [...g.edges]
+        .sort((a, b) => a.id.localeCompare(b.id))
+        .map((e) => [e.id, e.baseLeadTime, e.staticFreightCost, e.mode, [...e.regions].sort()]),
+    );
+  const reversed = [...suppliers].reverse();
+  check(
+    "graph edges identical regardless of supplier row order",
+    canon(buildGraph(suppliers)) === canon(buildGraph(reversed)),
+  );
+}
+
+// 4c. Multi-region legs (QC-5): the Malacca->Suez transit responds to BOTH
+//     sliders, additively.
+{
+  const e = graph.edges.find((x) => x.id === "route-malacca->route-suez")!;
+  const base = effectiveEdgeRisk(e, adj.nodesById, {});
+  const both = effectiveEdgeRisk(e, adj.nodesById, {
+    [REGIONS.MALACCA]: 0.3,
+    [REGIONS.SUEZ]: 0.4,
+  });
+  check(
+    "Malacca->Suez leg stacks severity from both regions",
+    Math.abs(both - base - 0.7) < 1e-9,
+    `${base.toFixed(3)} -> ${both.toFixed(3)}`,
+  );
+}
+
 // 5. Graceful degradation: suppliers with unknown countries still route
 {
   const { suppliers: odd } = rowsToSuppliers([

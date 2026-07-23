@@ -156,11 +156,26 @@ export interface LaneSeed {
   /** Ordered port/route node ids the lane traverses. */
   via: string[];
   mode: TransportMode;
-  /** Typical transit days for the whole lane. */
-  transitDays: number;
-  /** Static freight cost in abstract cost units (per weight formula). */
-  freightCost: number;
 }
+
+/**
+ * Canonical per-mode leg parameters. Each leg's lead time and freight are
+ * derived deterministically from great-circle distance and these rates, so
+ * a leg shared by several lanes/suppliers always gets identical values
+ * regardless of processing order (QC-4 fix). Values are calibration stubs
+ * pending live data; they intentionally include handling/customs overhead
+ * (e.g. rail's high days-per-km reflects the full Eurasia corridor length
+ * that the simplified two-waypoint chain under-measures).
+ */
+export const MODE_PARAMS: Record<
+  TransportMode,
+  { daysPer1000Km: number; handlingDays: number; freightPer1000Km: number }
+> = {
+  sea: { daysPer1000Km: 1.35, handlingDays: 0.6, freightPer1000Km: 0.37 },
+  rail: { daysPer1000Km: 3.2, handlingDays: 1.5, freightPer1000Km: 2.4 },
+  air: { daysPer1000Km: 0.15, handlingDays: 1.0, freightPer1000Km: 2.7 },
+  road: { daysPer1000Km: 1.0, handlingDays: 0.5, freightPer1000Km: 0.5 },
+};
 
 /**
  * Inbound lanes by destination macro-geography. The graph builder picks the
@@ -169,27 +184,27 @@ export interface LaneSeed {
  */
 export const INBOUND_LANES: Record<string, LaneSeed[]> = {
   europe: [
-    { via: ["port-shanghai", "route-malacca", "route-suez", "port-rotterdam"], mode: "sea", transitDays: 32, freightCost: 8 },
-    { via: ["port-shenzhen", "route-malacca", "route-suez", "port-hamburg"], mode: "sea", transitDays: 34, freightCost: 8 },
-    { via: ["rail-eurasia", "port-hamburg"], mode: "rail", transitDays: 22, freightCost: 14 },
-    { via: ["air-hub-global", "port-rotterdam"], mode: "air", transitDays: 5, freightCost: 42 },
+    { via: ["port-shanghai", "route-malacca", "route-suez", "port-rotterdam"], mode: "sea" },
+    { via: ["port-shenzhen", "route-malacca", "route-suez", "port-hamburg"], mode: "sea" },
+    { via: ["rail-eurasia", "port-hamburg"], mode: "rail" },
+    { via: ["air-hub-global", "port-rotterdam"], mode: "air" },
   ],
   "north-america": [
-    { via: ["port-shanghai", "port-la-lb"], mode: "sea", transitDays: 18, freightCost: 7 },
-    { via: ["port-busan", "port-oakland"], mode: "sea", transitDays: 16, freightCost: 7 },
-    { via: ["port-shenzhen", "route-panama", "port-la-lb"], mode: "sea", transitDays: 28, freightCost: 9 },
-    { via: ["air-hub-global", "port-la-lb"], mode: "air", transitDays: 4, freightCost: 40 },
+    { via: ["port-shanghai", "port-la-lb"], mode: "sea" },
+    { via: ["port-busan", "port-oakland"], mode: "sea" },
+    { via: ["port-shenzhen", "route-panama", "port-la-lb"], mode: "sea" },
+    { via: ["air-hub-global", "port-la-lb"], mode: "air" },
   ],
   asia: [
-    { via: ["port-shanghai"], mode: "sea", transitDays: 6, freightCost: 4 },
-    { via: ["port-singapore", "route-malacca"], mode: "sea", transitDays: 9, freightCost: 5 },
-    { via: ["port-kaohsiung"], mode: "sea", transitDays: 5, freightCost: 4 },
-    { via: ["air-hub-global"], mode: "air", transitDays: 2, freightCost: 30 },
+    { via: ["port-shanghai"], mode: "sea" },
+    { via: ["port-singapore", "route-malacca"], mode: "sea" },
+    { via: ["port-kaohsiung"], mode: "sea" },
+    { via: ["air-hub-global"], mode: "air" },
   ],
   "rest-of-world": [
-    { via: ["port-singapore", "route-malacca"], mode: "sea", transitDays: 20, freightCost: 9 },
-    { via: ["port-shanghai", "route-malacca", "route-suez"], mode: "sea", transitDays: 30, freightCost: 10 },
-    { via: ["air-hub-global"], mode: "air", transitDays: 5, freightCost: 45 },
+    { via: ["port-singapore", "route-malacca"], mode: "sea" },
+    { via: ["port-shanghai", "route-malacca", "route-suez"], mode: "sea" },
+    { via: ["air-hub-global"], mode: "air" },
   ],
 };
 

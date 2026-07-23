@@ -9,6 +9,7 @@
 
 import {
   INBOUND_LANES,
+  MODE_PARAMS,
   ORIGINS,
   PORTS,
   laneGeographyFor,
@@ -106,6 +107,7 @@ export function buildGraph(suppliers: SupplierRow[]): SupplyChainGraph {
       baseLeadTime: supplier.estimatedLeadTimeDays,
       staticFreightCost: 3,
       mode: "road",
+      regions: [],
     });
 
     const geography = laneGeographyFor(
@@ -127,23 +129,30 @@ export function buildGraph(suppliers: SupplierRow[]): SupplyChainGraph {
           if (port) addNode(portSeedToNode(port));
         }
 
-        // Distribute lane transit days & freight across legs by distance.
+        // Each leg is derived deterministically from great-circle distance
+        // and canonical per-mode rates, so shared legs get identical values
+        // no matter which supplier/lane touched them first. The final
+        // port -> supplier leg is always ground delivery.
         const pts = chainIds.map((id) => nodes.get(id)!);
-        const legDists = pts.slice(1).map((p, i) =>
-          Math.max(50, haversineKm(pts[i].lat, pts[i].lng, p.lat, p.lng)),
-        );
-        const total = legDists.reduce((a, b) => a + b, 0);
-
         pts.slice(1).forEach((target, i) => {
+          const from = pts[i];
+          const mode = i === pts.length - 2 ? "road" : lane.mode;
+          const mp = MODE_PARAMS[mode];
+          const dist = Math.max(50, haversineKm(from.lat, from.lng, target.lat, target.lng));
+          const regions = Array.from(
+            new Set([from.region, target.region].filter((r): r is string => !!r)),
+          );
           addEdge({
-            source: pts[i].id,
+            source: from.id,
             target: target.id,
-            baseLeadTime: Math.max(1, Math.round(lane.transitDays * (legDists[i] / total))),
+            baseLeadTime:
+              Math.round((mp.handlingDays + (dist * mp.daysPer1000Km) / 1000) * 10) / 10,
             staticFreightCost: Math.max(
-              1,
-              Math.round(lane.freightCost * (legDists[i] / total) * 10) / 10,
+              0.5,
+              Math.round(((dist * mp.freightPer1000Km) / 1000) * 10) / 10,
             ),
-            mode: lane.mode,
+            mode,
+            regions,
           });
         });
       }

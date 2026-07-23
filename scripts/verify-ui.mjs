@@ -20,7 +20,7 @@ const check = (name, ok, extra = "") => {
 }
 
 const browser = await chromium.launch({
-  executablePath: "/opt/pw-browsers/chromium",
+  executablePath: process.env.CHROMIUM_PATH ?? "/opt/pw-browsers/chromium",
   args: ["--no-sandbox"],
 });
 const page = await browser.newPage({ viewport: { width: 1680, height: 950 } });

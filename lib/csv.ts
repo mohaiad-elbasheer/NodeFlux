@@ -50,6 +50,48 @@ function normalizeHeader(h: string): string {
 const DEFAULT_LEAD_TIME_DAYS = 14;
 
 /**
+ * Locale-aware numeric parsing. Handles "12,5" (EU decimal comma), "1.234"
+ * (EU thousands), "1,234.5" (US thousands + decimal), "1 234,5" (space
+ * grouping). Rule: when both separators appear, the rightmost one is the
+ * decimal mark; a lone separator followed by exactly 3 digits is treated as
+ * a thousands separator, otherwise as a decimal mark.
+ */
+export function parseLocaleNumber(input: string): number {
+  let s = input.trim().replace(/[\s ']/g, "");
+  s = s.replace(/[^\d.,\-]/g, "");
+  if (!/\d/.test(s)) return NaN;
+
+  const lastDot = s.lastIndexOf(".");
+  const lastComma = s.lastIndexOf(",");
+
+  if (lastDot !== -1 && lastComma !== -1) {
+    const dec = Math.max(lastDot, lastComma) === lastDot ? "." : ",";
+    const group = dec === "." ? "," : ".";
+    s = s.split(group).join("");
+    if (dec === ",") s = s.replace(",", ".");
+  } else if (lastComma !== -1) {
+    const parts = s.split(",");
+    if (parts.length === 2 && parts[1].length === 3) {
+      s = parts.join(""); // "1,234" -> thousands
+    } else if (parts.length > 2) {
+      s = parts.join(""); // "1,234,567"
+    } else {
+      s = parts.join("."); // "12,5" -> decimal
+    }
+  } else if (lastDot !== -1) {
+    const parts = s.split(".");
+    if (parts.length === 2 && parts[1].length === 3 && parts[0].length <= 3) {
+      s = parts.join(""); // "1.234" -> thousands
+    } else if (parts.length > 2) {
+      s = parts.join(""); // "1.234.567"
+    }
+    // otherwise keep the dot as a decimal mark ("12.5", "1234.56")
+  }
+
+  return Number(s);
+}
+
+/**
  * Convert already-tabularized records (from papaparse or SheetJS) into
  * validated, geocoded, enriched SupplierRows.
  */
@@ -104,9 +146,13 @@ export function rowsToSuppliers(records: Record<string, unknown>[]): ParseOutcom
 
     let leadTime = DEFAULT_LEAD_TIME_DAYS;
     if (raw.leadTime !== undefined) {
-      const parsed = Number(String(raw.leadTime).replace(/[^\d.-]/g, ""));
+      const parsed = parseLocaleNumber(String(raw.leadTime));
       if (Number.isFinite(parsed) && parsed > 0 && parsed <= 365) {
-        leadTime = Math.round(parsed);
+        leadTime = Math.round(parsed * 10) / 10;
+      } else if (Number.isFinite(parsed) && parsed > 365) {
+        rowWarnings.push(
+          `Lead time "${raw.leadTime}" parsed as ${parsed} days (out of range) — default ${DEFAULT_LEAD_TIME_DAYS}d applied.`,
+        );
       } else {
         rowWarnings.push(`Invalid lead time "${raw.leadTime}" — default ${DEFAULT_LEAD_TIME_DAYS}d applied.`);
       }

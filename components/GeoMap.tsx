@@ -29,6 +29,55 @@ import type { GraphNode } from "@/lib/types";
 const topo = worldTopo as unknown as Topology<{ countries: GeometryCollection }>;
 const WORLD_OUTLINE = feature(topo, topo.objects.countries) as FeatureCollection;
 
+/**
+ * Great-circle interpolation between two points (spherical slerp), split
+ * into separate polyline segments wherever the arc crosses the antimeridian
+ * so Leaflet never draws a world-spanning straight line.
+ */
+function greatCircleSegments(
+  a: [number, number],
+  b: [number, number],
+  steps = 48,
+): [number, number][][] {
+  const toRad = (d: number) => (d * Math.PI) / 180;
+  const toDeg = (r: number) => (r * 180) / Math.PI;
+  const [lat1, lng1] = [toRad(a[0]), toRad(a[1])];
+  const [lat2, lng2] = [toRad(b[0]), toRad(b[1])];
+
+  const d =
+    2 *
+    Math.asin(
+      Math.sqrt(
+        Math.sin((lat2 - lat1) / 2) ** 2 +
+          Math.cos(lat1) * Math.cos(lat2) * Math.sin((lng2 - lng1) / 2) ** 2,
+      ),
+    );
+  if (d < 1e-9) return [[a, b]];
+
+  const pts: [number, number][] = [];
+  for (let i = 0; i <= steps; i++) {
+    const f = i / steps;
+    const A = Math.sin((1 - f) * d) / Math.sin(d);
+    const B = Math.sin(f * d) / Math.sin(d);
+    const x = A * Math.cos(lat1) * Math.cos(lng1) + B * Math.cos(lat2) * Math.cos(lng2);
+    const y = A * Math.cos(lat1) * Math.sin(lng1) + B * Math.cos(lat2) * Math.sin(lng2);
+    const z = A * Math.sin(lat1) + B * Math.sin(lat2);
+    pts.push([toDeg(Math.atan2(z, Math.sqrt(x * x + y * y))), toDeg(Math.atan2(y, x))]);
+  }
+
+  const segments: [number, number][][] = [];
+  let current: [number, number][] = [pts[0]];
+  for (let i = 1; i < pts.length; i++) {
+    if (Math.abs(pts[i][1] - pts[i - 1][1]) > 180) {
+      segments.push(current);
+      current = [];
+    }
+    current.push(pts[i]);
+  }
+  if (current.length > 1) segments.push(current);
+  return segments.filter((s) => s.length > 1);
+}
+
 function effectiveNodeRisk(
   node: GraphNode,
   severity: Record<string, number>,
@@ -65,13 +114,18 @@ export default function GeoMap() {
   const nodes = dataset?.graph.nodes ?? [];
   const riskZones = dataset?.riskZones ?? [];
 
-  const pathLatLngs = useMemo(() => {
+  const pathSegments = useMemo(() => {
     if (!highlightedPath) return null;
     const pts = highlightedPath.nodeIds
       .map((id) => nodesById.get(id))
       .filter((n): n is GraphNode => !!n && (n.lat !== 0 || n.lng !== 0))
       .map((n) => [n.lat, n.lng] as [number, number]);
-    return pts.length >= 2 ? pts : null;
+    if (pts.length < 2) return null;
+    const segments: [number, number][][] = [];
+    for (let i = 0; i < pts.length - 1; i++) {
+      for (const seg of greatCircleSegments(pts[i], pts[i + 1])) segments.push(seg);
+    }
+    return segments;
   }, [highlightedPath, nodesById]);
 
   const markerFor = (n: GraphNode) => {
@@ -179,13 +233,14 @@ export default function GeoMap() {
         );
       })}
 
-      {/* Highlighted alternative path */}
-      {pathLatLngs && (
+      {/* Highlighted alternative path (great-circle arcs) */}
+      {pathSegments?.map((seg, i) => (
         <Polyline
-          positions={pathLatLngs}
+          key={i}
+          positions={seg}
           pathOptions={{ color: "#e2e8f0", weight: 3, dashArray: "10 6", opacity: 0.9 }}
         />
-      )}
+      ))}
 
       {nodes.map(markerFor)}
     </MapContainer>

@@ -7,6 +7,9 @@ import type { Dataset } from "../types";
 
 const SNAPSHOT_PATH = join(process.cwd(), ".nodeflux", "snapshot.json");
 
+/** Bump when Dataset/graph shapes change; stale snapshots are discarded. */
+export const SCHEMA_VERSION = 2;
+
 // Survive Next.js dev-mode module reloads by hanging state off globalThis.
 const g = globalThis as unknown as { __nodefluxDataset?: Dataset | null };
 
@@ -25,7 +28,8 @@ export function loadDataset(): Dataset | null {
   if (g.__nodefluxDataset) return g.__nodefluxDataset;
   try {
     const raw = readFileSync(SNAPSHOT_PATH, "utf8");
-    const parsed = JSON.parse(raw) as Dataset;
+    const parsed = JSON.parse(raw) as Dataset | null;
+    if (!parsed || parsed.schemaVersion !== SCHEMA_VERSION) return null;
     g.__nodefluxDataset = parsed;
     return parsed;
   } catch {

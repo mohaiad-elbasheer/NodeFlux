@@ -47,7 +47,7 @@ export default function UploadDropzone() {
           <input
             ref={inputRef}
             type="file"
-            accept=".csv,.xlsx,.xls,text/csv"
+            accept=".csv,.xlsx,text/csv"
             className="hidden"
             onChange={(e) => {
               clearError();

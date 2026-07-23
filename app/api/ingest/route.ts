@@ -4,10 +4,10 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import Papa from "papaparse";
-import * as XLSX from "xlsx";
+import ExcelJS from "exceljs";
 import { rowsToSuppliers } from "@/lib/csv";
 import { buildGraph } from "@/lib/graph/build";
-import { saveDataset } from "@/lib/server/datastore";
+import { SCHEMA_VERSION, saveDataset } from "@/lib/server/datastore";
 import { RISK_ZONES } from "@/data/risk-zones";
 import type { Dataset } from "@/lib/types";
 
@@ -24,11 +24,40 @@ function parseCsv(text: string): Record<string, unknown>[] {
   return result.data;
 }
 
-function parseXlsx(buf: ArrayBuffer): Record<string, unknown>[] {
-  const wb = XLSX.read(buf, { type: "array" });
-  const sheet = wb.Sheets[wb.SheetNames[0]];
+function cellText(v: ExcelJS.CellValue): string {
+  if (v === null || v === undefined) return "";
+  if (typeof v === "object") {
+    if ("richText" in v) return v.richText.map((r) => r.text).join("");
+    if ("text" in v) return String(v.text);
+    if ("result" in v) return v.result === undefined ? "" : String(v.result);
+    if (v instanceof Date) return v.toISOString();
+  }
+  return String(v);
+}
+
+async function parseXlsx(buf: ArrayBuffer): Promise<Record<string, unknown>[]> {
+  const wb = new ExcelJS.Workbook();
+  await wb.xlsx.load(buf);
+  const sheet = wb.worksheets[0];
   if (!sheet) return [];
-  return XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: "" });
+
+  const headerRow = sheet.getRow(1);
+  const headers: string[] = [];
+  headerRow.eachCell({ includeEmpty: true }, (cell, col) => {
+    headers[col] = cellText(cell.value).trim();
+  });
+
+  const records: Record<string, unknown>[] = [];
+  sheet.eachRow((row, rowNumber) => {
+    if (rowNumber === 1) return;
+    const rec: Record<string, unknown> = {};
+    for (let col = 1; col < headers.length; col++) {
+      if (!headers[col]) continue;
+      rec[headers[col]] = cellText(row.getCell(col).value);
+    }
+    records.push(rec);
+  });
+  return records;
 }
 
 export async function POST(req: NextRequest) {
@@ -56,8 +85,14 @@ export async function POST(req: NextRequest) {
       }
       sourceFileName = file.name || "upload";
       const lower = sourceFileName.toLowerCase();
-      if (lower.endsWith(".xlsx") || lower.endsWith(".xls")) {
-        records = parseXlsx(await file.arrayBuffer());
+      if (lower.endsWith(".xls")) {
+        return NextResponse.json(
+          { error: "Legacy .xls is not supported — save as .xlsx or .csv and retry." },
+          { status: 415 },
+        );
+      }
+      if (lower.endsWith(".xlsx")) {
+        records = await parseXlsx(await file.arrayBuffer());
       } else {
         records = parseCsv(await file.text());
       }
@@ -84,6 +119,7 @@ export async function POST(req: NextRequest) {
     }
 
     const dataset: Dataset = {
+      schemaVersion: SCHEMA_VERSION,
       uploadedAt: new Date().toISOString(),
       sourceFileName,
       suppliers,

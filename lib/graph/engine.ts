@@ -22,15 +22,13 @@ export const MAX_RISK_MODIFIER = 2.5;
 
 export function effectiveEdgeRisk(
   edge: GraphEdge,
-  nodesById: Map<string, GraphNode>,
+  _nodesById: Map<string, GraphNode>,
   severity: RegionSeverity,
 ): number {
-  const s = nodesById.get(edge.source);
-  const t = nodesById.get(edge.target);
-  const injected = Math.max(
-    s?.region ? (severity[s.region] ?? 0) : 0,
-    t?.region ? (severity[t.region] ?? 0) : 0,
-  );
+  // Severities are additive across every region the leg is exposed to, so a
+  // Malacca->Suez transit responds to both sliders (capped for stability).
+  let injected = 0;
+  for (const r of edge.regions ?? []) injected += severity[r] ?? 0;
   return Math.min(MAX_RISK_MODIFIER, edge.baselineRisk + injected);
 }
 
