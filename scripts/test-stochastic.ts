@@ -11,6 +11,9 @@ import {
   evaluatePortfolioMC,
   pertParamsFor,
 } from "@/lib/stochastic/model";
+import { rowsToSuppliers } from "@/lib/csv";
+import { buildGraph } from "@/lib/graph/build";
+import { computeStochasticRoutings } from "@/lib/graph/stochastic-routing";
 import type { GraphEdge } from "@/lib/types";
 
 let failures = 0;
@@ -154,6 +157,67 @@ const pathAC = { id: "AC", edgeIds: ["eA", "eC"] };
     "zero severity keeps P95 near the PERT envelope (no phantom disruptions)",
     s0.p95 < (pertParamsFor(eA).max + pertParamsFor(eB).max) * 1.001,
     `p95 ${s0.p95}`,
+  );
+}
+
+// ---------------------------------------------------------------------------
+// 6. Routing under uncertainty (S-2) on a real mini-portfolio.
+// ---------------------------------------------------------------------------
+{
+  const { suppliers } = rowsToSuppliers([
+    { Supplier_Name: "Bavaria Semiconductor AG", Country_of_Origin: "Germany", City: "Dresden", Estimated_Lead_Time_Days: "28" },
+    { Supplier_Name: "Eindhoven Photonics BV", Country_of_Origin: "Netherlands", City: "Eindhoven", Estimated_Lead_Time_Days: "24" },
+    { Supplier_Name: "Austin Chip Fab", Country_of_Origin: "United States", City: "Austin", Estimated_Lead_Time_Days: "25" },
+    { Supplier_Name: "Foxlink Precision", Country_of_Origin: "Taiwan", City: "Hsinchu", Estimated_Lead_Time_Days: "18" },
+    { Supplier_Name: "Hanoi Circuit Works", Country_of_Origin: "Vietnam", City: "Hanoi", Estimated_Lead_Time_Days: "17" },
+  ]);
+  const graph = buildGraph(suppliers);
+
+  const run = (policy: "expected" | "p95", sev: Record<string, number>) =>
+    computeStochasticRoutings(graph, suppliers, sev, policy, { n: 3000, seed: 21 });
+
+  const base = run("expected", {});
+  const totalDeps = suppliers.reduce((a, s) => a + s.tier2Dependencies.length, 0);
+  check(
+    "every Tier-2 origin of every supplier is routed",
+    base.routings.length === totalDeps,
+    `${base.routings.length}/${totalDeps}`,
+  );
+  check(
+    "each routing carries stats on every ranked path",
+    base.routings.every((r) => r.paths.length > 0 && r.paths.every((p) => !!p.stats)),
+  );
+
+  // Policy divergence: scan moderate bottleneck severities for a case where
+  // the risk-averse (P95) recommendation differs from the expected-value one
+  // (a mean-fast but tail-fat lane losing to a stabler alternative).
+  let diverged = "";
+  outer: for (const region of ["Suez Canal", "East Asia Hub", "Malacca Strait", "South China Sea"]) {
+    for (const s of [0.3, 0.4, 0.5, 0.6]) {
+      const sev = { [region]: s };
+      const exp = run("expected", sev);
+      const p95 = run("p95", sev);
+      for (const er of exp.routings) {
+        const pr = p95.routings.find(
+          (r) => r.supplierId === er.supplierId && r.originNodeId === er.originNodeId,
+        );
+        if (pr && er.paths[0].edgeIds.join() !== pr.paths[0].edgeIds.join()) {
+          diverged = `${region} @ ${s}, ${er.supplierId}/${er.originNodeId}`;
+          break outer;
+        }
+      }
+    }
+  }
+  check(
+    "P95 policy recommends a different path than Expected under a bottleneck",
+    diverged !== "",
+    diverged || "no divergence found in scan",
+  );
+
+  check(
+    "edge tail ratios exposed for tail-risk coloring",
+    Object.keys(base.edgeP95Ratio).length > 20,
+    `${Object.keys(base.edgeP95Ratio).length} edges`,
   );
 }
 
