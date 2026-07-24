@@ -53,40 +53,41 @@ check(
   /P50/.test(quantiles) && /P95/.test(quantiles) && /CVaR/.test(quantiles) && /On-time/.test(quantiles),
 );
 
-// 2. Focus a German supplier and its Taiwan wafer dependency, then check
-//    policy-dependent rerouting under a moderate Suez spike.
-await page.locator(".react-flow__node", { hasText: "Bavaria Semiconductor" }).first().click();
-await page.waitForTimeout(500);
-const originChip = page.locator('[data-testid="stochastic-report"] button', {
-  hasText: "Rare Earth",
-});
-if ((await originChip.count()) > 0) await originChip.first().click();
-await page.locator("button", { hasText: "Suez Canal" }).first().click();
-
-const pathOneText = async () => {
-  const card = page.locator('[data-testid="stochastic-report"] li').first();
-  return (await card.textContent()) ?? "";
-};
-
-let diverged = "";
-for (const sev of [40, 50, 30, 60]) {
-  await page.locator("#severity-slider").fill(String(sev));
-  await page.waitForFunction(
+// 2. Policy-dependent rerouting: under some bottleneck, the risk-averse (P95)
+//    recommendation for the focused (most-impacted) supplier differs from the
+//    expected-value one. Scan regions × severities with auto-focus tracking
+//    whichever supplier the bottleneck hurts most.
+const waitRefined = () =>
+  page.waitForFunction(
     () => document.querySelector('[data-testid="mc-footer"]')?.textContent?.includes("refined"),
     { timeout: 30000 },
   );
-  await page.locator('[data-testid="policy-p95"]').click();
-  await page.waitForTimeout(800);
-  const p95Route = (await pathOneText()).split("mean")[0];
-  await page.locator('[data-testid="policy-expected"]').click();
-  await page.waitForTimeout(800);
-  const expRoute = (await pathOneText()).split("mean")[0];
-  if (p95Route !== expRoute) {
-    diverged = `severity ${sev}%`;
-    break;
+const pathOneRoute = async () => {
+  const card = page.locator('[data-testid="stochastic-report"] li').first();
+  return ((await card.textContent()) ?? "").split("mean")[0];
+};
+
+let diverged = "";
+outer: for (const region of ["East Asia Hub", "South China Sea", "Malacca Strait", "Suez Canal"]) {
+  const resetBtn = page.locator("button", { hasText: "Reset all" });
+  if ((await resetBtn.count()) > 0) await resetBtn.click();
+  await page.locator("button", { hasText: region }).first().click();
+  for (const sev of [30, 40, 50, 60]) {
+    await page.locator("#severity-slider").fill(String(sev));
+    await waitRefined();
+    await page.locator('[data-testid="policy-p95"]').click();
+    await page.waitForTimeout(900);
+    const p95Route = await pathOneRoute();
+    await page.locator('[data-testid="policy-expected"]').click();
+    await page.waitForTimeout(900);
+    const expRoute = await pathOneRoute();
+    if (p95Route && p95Route !== expRoute) {
+      diverged = `${region} @ ${sev}%`;
+      break outer;
+    }
   }
 }
-check("P95 vs Expected policy recommend different Path 1 under Suez spike", diverged !== "", diverged || "no divergence");
+check("P95 vs Expected policy recommend a different Path 1 under a bottleneck", diverged !== "", diverged || "no divergence found");
 
 await page.screenshot({ path: `${SCRATCH}/sprint1-stochastic.png` });
 

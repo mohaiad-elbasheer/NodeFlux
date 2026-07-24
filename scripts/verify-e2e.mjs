@@ -33,6 +33,11 @@ await page.setInputFiles('input[type="file"]', "public/sample-suppliers.csv");
 await page.waitForSelector("text=Geospatial Risk Map", { timeout: 30000 });
 check("CSV upload transitions to the dual-view workspace", true);
 
+// This suite exercises the deterministic report; the default engine is now
+// stochastic, so switch to deterministic explicitly first.
+await page.locator('[data-testid="engine-deterministic"]').click();
+await page.waitForSelector("text=Top 3 Recommended Pathways", { timeout: 15000 });
+
 // 3. Report renders with three ranked paths.
 const pathCards = await page.locator("text=RECOMMENDED").count();
 check("report shows a recommended path", pathCards >= 1);
