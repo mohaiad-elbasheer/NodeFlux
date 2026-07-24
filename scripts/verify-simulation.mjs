@@ -32,6 +32,11 @@ page.on("pageerror", (e) => pageErrors.push(String(e)));
 await page.goto("http://localhost:3100/", { waitUntil: "networkidle", timeout: 60000 }).catch(() => {});
 await page.waitForSelector("text=Bottleneck Simulation", { timeout: 20000 });
 
+// This suite exercises deterministic edge-recolor + rerouting; the default
+// engine is now stochastic, so switch to deterministic explicitly first.
+await page.locator('[data-testid="engine-deterministic"]').click();
+await page.waitForSelector("text=Top 3 Recommended Pathways", { timeout: 15000 });
+
 // Focus a German supplier so the report tracks it.
 await page.locator(".react-flow__node", { hasText: "Bavaria Semiconductor" }).first().click();
 await page.waitForTimeout(600);
