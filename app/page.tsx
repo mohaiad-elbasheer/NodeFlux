@@ -16,6 +16,7 @@ import UploadDropzone from "@/components/UploadDropzone";
 import SupplierDetail from "@/components/SupplierDetail";
 import SimulationPanel from "@/components/SimulationPanel";
 import AltPathsReport from "@/components/AltPathsReport";
+import ExplainPanel from "@/components/ExplainPanel";
 import { useAppStore } from "@/lib/store";
 
 function WarningsBanner() {
@@ -122,9 +123,10 @@ export default function Home() {
             </div>
           </section>
 
-          <aside className="flex w-80 shrink-0 flex-col gap-1.5 overflow-y-auto">
+          <aside className="flex w-96 shrink-0 flex-col gap-1.5 overflow-y-auto">
             <SimulationPanel />
             <AltPathsReport />
+            <ExplainPanel />
             <SupplierDetail />
           </aside>
         </main>

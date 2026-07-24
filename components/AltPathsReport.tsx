@@ -5,15 +5,13 @@
 // shows distributional stats — histogram, P50/P95, CVaR, on-time gauge, and
 // mean deltas with a CI half-width (conservative: ignores CRN covariance).
 
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import { ArrowRight, Route, TrendingDown, TrendingUp } from "lucide-react";
 import { useAppStore } from "@/lib/store";
+import { useStochasticFocus } from "@/lib/useFocus";
 import { fmtDelta, riskBadgeClasses } from "@/lib/utils";
 import type { PathResult, SupplierRouting } from "@/lib/types";
-import type {
-  StochasticPathResult,
-  StochasticRouting,
-} from "@/lib/graph/stochastic-routing";
+import type { StochasticPathResult } from "@/lib/graph/stochastic-routing";
 import type { PathStats } from "@/lib/stochastic/model";
 
 const MODE_HINTS: Record<string, string> = {
@@ -103,48 +101,14 @@ function StochasticReport() {
   const dataset = useAppStore((s) => s.dataset);
   const nodesById = useAppStore((s) => s.nodesById);
   const stochastic = useAppStore((s) => s.stochastic);
-  const baseline = useAppStore((s) => s.stochasticBaseline);
   const selectedNodeId = useAppStore((s) => s.selectedNodeId);
   const sla = useAppStore((s) => s.sla);
   const highlightPath = useAppStore((s) => s.highlightPath);
   const highlightedPath = useAppStore((s) => s.highlightedPath);
+  const setOriginChoice = useAppStore((s) => s.setOriginChoice);
   const routeSummary = useRouteSummary();
-  const [originChoice, setOriginChoice] = useState<Record<string, string>>({});
 
-  const bySupplier = useMemo(() => {
-    const m = new Map<string, StochasticRouting[]>();
-    for (const r of stochastic?.routings ?? []) {
-      if (!m.has(r.supplierId)) m.set(r.supplierId, []);
-      m.get(r.supplierId)!.push(r);
-    }
-    for (const list of m.values()) list.sort((a, b) => b.sharePct - a.sharePct);
-    return m;
-  }, [stochastic]);
-
-  const baselineFor = (supplierId: string, originNodeId: string) =>
-    baseline?.routings.find(
-      (r) => r.supplierId === supplierId && r.originNodeId === originNodeId,
-    )?.paths[0];
-
-  // Focus: selected supplier, else the supplier whose recommended path's P95
-  // degraded most vs the zero-severity baseline.
-  const focusSupplierId = useMemo(() => {
-    if (selectedNodeId && bySupplier.has(selectedNodeId)) return selectedNodeId;
-    let worst: string | undefined;
-    let worstDelta = -Infinity;
-    for (const [sid, list] of bySupplier) {
-      const cur = list[0]?.paths[0];
-      const base = list[0] ? baselineFor(sid, list[0].originNodeId) : undefined;
-      if (!cur || !base) continue;
-      const d = cur.stats.p95 - base.stats.p95;
-      if (d > worstDelta) {
-        worstDelta = d;
-        worst = sid;
-      }
-    }
-    return worst ?? bySupplier.keys().next().value;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bySupplier, selectedNodeId, baseline]);
+  const { supplier, focusSupplierId, origins, routing, baseBest } = useStochasticFocus();
 
   if (!dataset || !stochastic || !focusSupplierId) {
     return (
@@ -153,13 +117,7 @@ function StochasticReport() {
       </div>
     );
   }
-
-  const supplier = dataset.suppliers.find((s) => s.id === focusSupplierId);
-  const origins = bySupplier.get(focusSupplierId) ?? [];
-  const chosenOrigin = originChoice[focusSupplierId];
-  const routing = origins.find((o) => o.originNodeId === chosenOrigin) ?? origins[0];
   if (!routing) return null;
-  const baseBest = baselineFor(focusSupplierId, routing.originNodeId);
 
   return (
     <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-4" data-testid="stochastic-report">
@@ -181,9 +139,7 @@ function StochasticReport() {
             return (
               <button
                 key={o.originNodeId}
-                onClick={() =>
-                  setOriginChoice((c) => ({ ...c, [focusSupplierId]: o.originNodeId }))
-                }
+                onClick={() => setOriginChoice(focusSupplierId, o.originNodeId)}
                 className={`rounded-full border px-2 py-0.5 text-[10px] transition-colors ${
                   active
                     ? "border-violet-500/60 bg-violet-500/15 text-violet-300"

@@ -14,6 +14,7 @@ import {
 import { rowsToSuppliers } from "@/lib/csv";
 import { buildGraph } from "@/lib/graph/build";
 import { computeStochasticRoutings } from "@/lib/graph/stochastic-routing";
+import { attributePathDelay } from "@/lib/stochastic/attribution";
 import type { GraphEdge } from "@/lib/types";
 
 let failures = 0;
@@ -219,6 +220,53 @@ const pathAC = { id: "AC", edgeIds: ["eA", "eC"] };
     Object.keys(base.edgeP95Ratio).length > 20,
     `${Object.keys(base.edgeP95Ratio).length} edges`,
   );
+}
+
+// ---------------------------------------------------------------------------
+// 7. Explainability: analytic delay attribution reconstructs the MC mean and
+//    ranking is consistent with the policy (recommended path is metric-best).
+// ---------------------------------------------------------------------------
+{
+  const { suppliers: sup2 } = rowsToSuppliers([
+    { Supplier_Name: "Siemens Components GmbH", Country_of_Origin: "Germany", City: "Munich", Estimated_Lead_Time_Days: "21" },
+  ]);
+  const g2 = buildGraph(sup2);
+  const edgeById = new Map(g2.edges.map((e) => [e.id, e]));
+  const sev = { "Suez Canal": 0.7 };
+  const comp = computeStochasticRoutings(g2, sup2, sev, "p95", { n: 8000, seed: 42 });
+
+  // Attribution total reconstructs the MC mean for each ranked path.
+  let maxErr = 0;
+  for (const r of comp.routings) {
+    for (const p of r.paths) {
+      const edges = p.edgeIds.map((id) => edgeById.get(id)!).filter(Boolean);
+      const attr = attributePathDelay(edges, sev);
+      maxErr = Math.max(maxErr, Math.abs(attr.totalDays - p.stats.mean) / p.stats.mean);
+    }
+  }
+  check("attribution total reconstructs MC mean within 3%", maxErr < 0.03, `max err ${(maxErr * 100).toFixed(2)}%`);
+
+  // Recommended path is genuinely the P95-best (no cost blended into the score).
+  let consistent = true;
+  for (const r of comp.routings) {
+    const best = Math.min(...r.paths.map((p) => p.stats.p95));
+    if (r.paths[0].stats.p95 > best + 0.5) consistent = false;
+  }
+  check("recommended path is the P95-best of its candidates (policy-consistent)", consistent);
+
+  // A Suez-traversing path attributes added days to Suez.
+  const suezPath = comp.routings
+    .flatMap((r) => r.paths)
+    .find((p) => p.edgeIds.some((id) => (edgeById.get(id)?.regions ?? []).includes("Suez Canal")));
+  if (suezPath) {
+    const edges = suezPath.edgeIds.map((id) => edgeById.get(id)!).filter(Boolean);
+    const attr = attributePathDelay(edges, sev);
+    check(
+      "Suez-traversing path attributes added days to Suez",
+      attr.byRegion.some((x) => x.region === "Suez Canal" && x.days > 1),
+      JSON.stringify(attr.byRegion),
+    );
+  }
 }
 
 console.log(failures === 0 ? "\nAll stochastic tests passed." : `\n${failures} test(s) FAILED.`);

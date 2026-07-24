@@ -48,6 +48,8 @@ interface AppState {
   engineMode: EngineMode;
   riskPolicy: RiskPolicy;
   sla: number;
+  /** Which Tier-2 origin is being inspected per supplier (report + explainer). */
+  originChoice: Record<string, string>;
   /** Latest stochastic computation (worker-produced). */
   stochastic: StochasticComputation | null;
   /** Zero-severity stochastic reference for deltas. */
@@ -67,6 +69,7 @@ interface AppState {
   setEngineMode: (mode: EngineMode) => void;
   setRiskPolicy: (policy: RiskPolicy) => void;
   setSla: (sla: number) => void;
+  setOriginChoice: (supplierId: string, originNodeId: string) => void;
 }
 
 function indexNodes(dataset: Dataset | null): Map<string, GraphNode> {
@@ -167,6 +170,7 @@ export const useAppStore = create<AppState>((set, get) => {
     engineMode: "stochastic",
     riskPolicy: "p95",
     sla: 30,
+    originChoice: {},
     stochastic: null,
     stochasticBaseline: null,
     samplingState: "idle",
@@ -252,5 +256,8 @@ export const useAppStore = create<AppState>((set, get) => {
       computeStochasticBaseline();
       runStochastic(MC_N_REFINED, true);
     },
+
+    setOriginChoice: (supplierId, originNodeId) =>
+      set({ originChoice: { ...get().originChoice, [supplierId]: originNodeId } }),
   };
 });

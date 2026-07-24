@@ -95,20 +95,18 @@ export function computeStochasticRoutings(
     opts,
   );
 
-  // 3. Rank by policy. Time-based policies blend in static freight exactly
-  //    like the deterministic weight does (days + freight units); the
-  //    on-time policy ranks by probability with freight as the tiebreaker.
+  // 3. Rank purely by the chosen risk metric so the recommendation is always
+  //    consistent with the policy the analyst picked (P95 → lowest P95, etc.).
+  //    Freight is a real trade-off but lives in different units (cost, not
+  //    days), so it only breaks near-ties — routes whose metric differs by
+  //    less than a small tolerance prefer the cheaper option. The freight
+  //    delta is always shown to the analyst, never hidden inside the score.
+  const TOL = policy === "onTime" ? 0.02 : 0.5; // 2 pts on-time, or 0.5 day
   const rank = (a: StochasticPathResult, b: StochasticPathResult): number => {
-    if (policy === "onTime") {
-      return (
-        b.stats.onTimeProb - a.stats.onTimeProb ||
-        a.totalFreightCost - b.totalFreightCost ||
-        a.totalWeight - b.totalWeight
-      );
-    }
-    const sa = policyScore(a.stats, policy) + a.totalFreightCost;
-    const sb = policyScore(b.stats, policy) + b.totalFreightCost;
-    return sa - sb || a.totalWeight - b.totalWeight;
+    const sa = policyScore(a.stats, policy);
+    const sb = policyScore(b.stats, policy);
+    if (Math.abs(sa - sb) > TOL) return sa - sb;
+    return a.totalFreightCost - b.totalFreightCost || a.totalWeight - b.totalWeight;
   };
 
   const routings: StochasticRouting[] = groups.map((g) => ({
