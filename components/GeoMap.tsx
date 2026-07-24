@@ -15,6 +15,7 @@ import {
   Tooltip,
   useMap,
 } from "react-leaflet";
+import type { LatLngBoundsExpression } from "leaflet";
 import "leaflet/dist/leaflet.css";
 import { feature } from "topojson-client";
 import worldTopo from "world-atlas/countries-110m.json";
@@ -28,6 +29,13 @@ import type { GraphNode } from "@/lib/types";
 // unreachable (offline demos, restricted networks). Tiles draw on top.
 const topo = worldTopo as unknown as Topology<{ countries: GeometryCollection }>;
 const WORLD_OUTLINE = feature(topo, topo.objects.countries) as FeatureCollection;
+
+// Constrain panning to a single world so tiles/markers never wrap or reveal
+// grey/black void beyond the map edges.
+const WORLD_BOUNDS: LatLngBoundsExpression = [
+  [-85, -180],
+  [85, 180],
+];
 
 /**
  * Great-circle interpolation between two points (spherical slerp), split
@@ -84,6 +92,32 @@ function effectiveNodeRisk(
 ): number {
   const injected = node.region ? (severity[node.region] ?? 0) : 0;
   return Math.min(2.5, node.baselineRisk + injected);
+}
+
+/**
+ * Keeps Leaflet's internal size in sync with its container. Leaflet only
+ * recomputes size on window resize, so flexbox changes from the Map/Split/
+ * Graph toggle leave the map rendered at a stale width (black gutter,
+ * mis-positioned tiles). A ResizeObserver + a viewMode-driven pass fix it.
+ */
+function MapResizer() {
+  const map = useMap();
+  const viewMode = useAppStore((s) => s.viewMode);
+
+  useEffect(() => {
+    const container = map.getContainer();
+    const ro = new ResizeObserver(() => map.invalidateSize({ animate: false }));
+    ro.observe(container);
+    return () => ro.disconnect();
+  }, [map]);
+
+  useEffect(() => {
+    // Run after the flexbox layout for the new mode has settled.
+    const t = setTimeout(() => map.invalidateSize({ animate: false }), 60);
+    return () => clearTimeout(t);
+  }, [map, viewMode]);
+
+  return null;
 }
 
 /** Pans the map to the node selected on either canvas. */
@@ -182,26 +216,40 @@ export default function GeoMap() {
       center={[24, 40]}
       zoom={2}
       minZoom={2}
+      maxZoom={7}
       className="h-full w-full"
       style={{ background: "#0b1220" }}
-      worldCopyJump
+      maxBounds={WORLD_BOUNDS}
+      maxBoundsViscosity={1}
       attributionControl={false}
     >
+      {/* Bundled vector world as the always-present base — legible with or
+          without tiles, so a blocked/slow CDN never leaves a blank/black map. */}
       <GeoJSON
         data={WORLD_OUTLINE}
         style={{
-          color: "#1e293b",
-          weight: 0.7,
-          fillColor: "#111c30",
+          color: "#334155",
+          weight: 0.6,
+          fillColor: "#152238",
           fillOpacity: 1,
           interactive: false,
         }}
       />
+      {/* Street tiles layered on top; noWrap avoids the repeated-world smear,
+          and a load-error handler blanks failed tiles instead of black boxes. */}
       <TileLayer
         url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
-        attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>'
-        opacity={0.9}
+        attribution='&copy; OpenStreetMap &copy; CARTO'
+        opacity={0.85}
+        noWrap
+        eventHandlers={{
+          tileerror: (e) => {
+            const img = e.tile as HTMLImageElement;
+            img.style.visibility = "hidden";
+          },
+        }}
       />
+      <MapResizer />
       <FlyToSelection />
 
       {/* Climate & infrastructure risk heat overlay */}

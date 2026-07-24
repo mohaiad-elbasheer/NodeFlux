@@ -162,7 +162,9 @@ export const useAppStore = create<AppState>((set, get) => {
     regionSeverity: {},
     routings: [],
     baselineRoutings: [],
-    engineMode: "deterministic",
+    // Stochastic by default so the distributional analysis is visible on
+    // load; the toggle drops back to the simple deterministic view.
+    engineMode: "stochastic",
     riskPolicy: "p95",
     sla: 30,
     stochastic: null,
